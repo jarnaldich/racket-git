@@ -1,0 +1,75 @@
+#lang racket
+
+(require rackunit
+         rackunit/text-ui
+         "libgit2.rkt")
+
+;;; SYNTAX
+(define-for-syntax test-cases/ '())
+(define-syntax (git-test stx)
+  (set! test-cases/
+        (cons
+         (syntax-case stx ()
+           [(_ desc body ...) #'(test-case desc body ...)])
+         test-cases/))
+  #'(void))
+
+(define-syntax (git-run-tests stx)
+  #`(run-tests (test-suite "libgit2"
+                           #,@test-cases/)))
+;;; TESTS
+(define repo-path
+  (build-path (let-values ([(dir _ __)
+                            (split-path (syntax-source #'here))]) dir)
+              (string->path ".git")))
+
+(git-test
+ "OID Conversion"
+ (define test-hex "599955586da1c3ad514f3e65f1081d2012ec862d")
+ (check-equal? test-hex
+               (oid->string (string->oid test-hex))))
+
+(git-test
+ "Repository"
+ (check-exn exn:fail? ;TODO: Improve error message...
+            (lambda () (git-repository-open "potato")))
+ (check-not-exn
+  (lambda ()
+    (git-repository-open repo-path)) )
+ )
+
+(git-test
+ "Commit"
+ (let* ([repo (git-repository-open repo-path)]
+        [first-commit-oid "0ddbfc8f266e73d777591ce31d3ddb4ccb7a9d37"]
+        [first-commit (git-commit-lookup repo first-commit-oid)])
+   (check-equal? (git-signature-name (git-commit-committer first-commit))
+                 #"Joan Arnaldich")
+   (check-equal? (git-signature-email (git-commit-committer first-commit))
+                 #"jarnaldich@gmail.com")
+   (check-equal? (git-commit-message first-commit)
+                 #"First commit\n")
+   (check-equal? (git-commit-id first-commit)
+                 (string->oid first-commit-oid))
+   (check-equal? (git-commit-message-encoding first-commit)
+                 #f) ; Default encoding
+   (check-equal? (git-signature-name (git-commit-author first-commit))
+                 #"Joan Arnaldich")
+   (check-equal? (git-signature-email (git-commit-author first-commit))
+                 #"jarnaldich@gmail.com")
+   (check-equal? (git-commit-time first-commit)
+                 1314857888)
+   (check-equal? (git-commit-time-offset first-commit)
+                 120)
+   (check-equal? (oid->string (git-commit-tree-oid first-commit))
+                 "3695f941bc2e3ccdcdbdd8606649e7367bc2b085")
+   (check-equal? (git-commit-parentcount first-commit)
+                 0)
+   ))
+;;; UNIT TESTS
+
+
+
+
+(git-run-tests)
+
