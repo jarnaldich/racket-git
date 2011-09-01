@@ -122,15 +122,15 @@
 ;;; OBJECT
 (define _git_otype
   (_enum '(GIT_OBJ_ANY = -2    
-                       GIT_OBJ_BAD = -1    
-                       GIT_OBJ__EXT1 = 0   
-                       GIT_OBJ_COMMIT = 1  
-                       GIT_OBJ_TREE = 2    
-                       GIT_OBJ_BLOB = 3    
-                       GIT_OBJ_TAG = 4     
-                       GIT_OBJ__EXT2 = 5   
-                       GIT_OBJ_OFS_DELTA = 6
-                       GIT_OBJ_REF_DELTA = 7)))
+           GIT_OBJ_BAD = -1    
+           GIT_OBJ__EXT1 = 0   
+           GIT_OBJ_COMMIT = 1  
+           GIT_OBJ_TREE = 2    
+           GIT_OBJ_BLOB = 3    
+           GIT_OBJ_TAG = 4     
+           GIT_OBJ__EXT2 = 5   
+           GIT_OBJ_OFS_DELTA = 6
+           GIT_OBJ_REF_DELTA = 7)))
 
 (define-cpointer-type _git_object #f #f
   (lambda (p) (register-finalizer p git-object-close) p))
@@ -206,14 +206,14 @@
 (define _git_config_file (_cpointer 'git_config_file))
 (define _git_reflog_entry (_cpointer 'git_reflog_entry))
 
-(defgit git-tree-id : _git_tree -> _oid)
-(defgit git-tree-entrycount : _git_tree -> _uint)
-(defgit git-tree-entry-byname : _git_tree _path -> _git_tree_entry )
-(defgit git-tree-entry-byindex : _git_tree _uint -> _git_tree_entry )
-(defgit git-tree-entry-attributes : _git_tree_entry -> _uint )
-(defgit git-tree-entry-name : _git_tree_entry -> _path )
-(defgit git-tree-entry-id : _git_tree_entry -> _oid)
-(defgit git-tree-entry-type : _git_tree_entry -> _git_otype )
+(defgit/provide git-tree-id : _git_tree -> _oid)
+(defgit/provide git-tree-entrycount : _git_tree -> _uint)
+(defgit/provide git-tree-entry-byname : _git_tree _path -> _git_tree_entry )
+(defgit/provide git-tree-entry-byindex : _git_tree _uint -> _git_tree_entry )
+(defgit/provide git-tree-entry-attributes : _git_tree_entry -> _uint )
+(defgit/provide git-tree-entry-name : _git_tree_entry -> _path )
+(defgit/provide git-tree-entry-id : _git_tree_entry -> _oid)
+(defgit/provide git-tree-entry-type : _git_tree_entry -> _git_otype )
 (defgit git-tree-entry-2object :
   [obj : (_ptr o _git_object)]
   _git_repository
@@ -260,12 +260,12 @@
 (defgit/provide git-commit-tree-oid : _git_commit -> _oid)
 (defgit/provide git-commit-parentcount : _git_commit -> _uint)
 
-(defgit git-commit-parent :
+(defgit git-commit-parent :             ; Private, by now...
   [parent : (_ptr o _git_commit)]
   _git_commit
   _uint
   -> _status 
   -> parent)
 
-(defgit git-commit-parent-oid : _git_commit _uint -> _oid)
+(defgit/provide git-commit-parent-oid : _git_commit _uint -> _oid)
 
