@@ -28,48 +28,54 @@
                                   (error 'status-failed (format "failed with code: ~a" r)))))]))
 
 (define-for-syntax (build-name-stx upcase? stx parts)
-    (datum->syntax
-     stx
-     (string->symbol
-      (apply string-append
-             (map (lambda (p)
-                    (if (syntax? p)
-                        (let ([str (symbol->string (syntax-e p))])
-                          (if upcase?
-                              (string-upcase str)
-                              str))
-                        p))
-                  parts)))))
+  (define str
+    (apply string-append
+           (for/list ([p parts])
+                     (if (syntax? p)
+                         (symbol->string (syntax-e p))
+                         p))))
+  (datum->syntax
+   stx
+   (string->symbol (if upcase?
+                       (string-upcase str)
+                       str))))
 
-(define-syntax (define-cpointer-type/finalizer stx)
-  (define (build-name #:upcase? [upcase? #f] . parts) (build-name-stx upcase? stx parts))
+(define-syntax (defptr/release stx)
+  (define (build-name #:upcase? [upcase? #f] . parts)
+    (build-name-stx upcase? stx parts))
   (syntax-case stx ()
     [(_ name release-func)
-     #`(define-cpointer-type #,(build-name "_git_" #'name) #f #f
-         (lambda (p) (register-finalizer p #,(build-name "git-" #'name "-" #'release-func)) p))]))
+     (with-syntax ([type-name (build-name "_git_" #'name)]
+                   [finalizer-name (build-name "git-" #'name "-" #'release-func) ])
+       #'(begin
+           (defgit finalizer-name : _pointer -> _void)
+           (define-cpointer-type type-name #f #f
+             (lambda (p) (register-finalizer p finalizer-name) p))))]))
 
 (define-syntax (define-object-type stx)
   (define (build-name #:upcase? [upcase? #f] . parts) (build-name-stx upcase? stx parts))
   (syntax-case stx ()
-    [(_ name) #`(begin
-                  (define #,(build-name "_git_" #'name) 
-                    (_cpointer '#,(build-name "_git_" #'name) _git_object #f
-                               (lambda (p) (register-finalizer p git-object-close) p)))
-                  (provide #,(build-name "git-" #'name "-lookup"))
-                  (define (#,(build-name "git-" #'name "-lookup") repo oid)
-                    (let ([obj (git-object-lookup repo oid '#,(build-name #:upcase? #t "GIT_OBJ_" #'name))])
-                      (cpointer-push-tag! obj '#,(build-name "_git_" #'name))
-                      obj))
-                  (define (#,(build-name "git-" #'name "-lookup-prefix") repo oid)
-                    (let ([obj (git-object-lookup-prefix repo oid '#,(build-name #:upcase? #t "GIT_OBJ_" #'name))])
-                      (cpointer-push-tag! obj (symbol->string '#,(build-name "git_" #'name)))
-                      obj))                  
-                  (define (#,(build-name "git-" #'name "-close") obj)
-                    (git-object-close obj))
-                  
-                                        ; Blob does not have the git-blob-id... 
-                                        ;(defgit  #,(build-name "git-" #'name "-id") : #,(build-name "_git_" #'name) -> _oid)
-                  )]))
+    [(_ name)
+     (with-syntax ([type-name (build-name "_git_" #'name)]
+                   [lookup-name (build-name "git-" #'name "-lookup")]
+                   [close-name (build-name "git-" #'name "-close")]                   
+                   [lookup-prefix-name (build-name "git-" #'name "-lookup-prefix")]                   
+                   [enum-type-name (build-name #:upcase? #t "GIT_OBJ_" #'name)])
+       #'(begin
+           (define type-name 
+             (_cpointer 'type-name _git_object #f
+                        (lambda (p) (register-finalizer p git-object-close) p)))
+           (provide lookup-name)
+           (define (lookup-name repo oid)
+             (let ([obj (git-object-lookup repo oid 'enum-type-name)])
+               (cpointer-push-tag! obj 'type-name)
+               obj))
+           (define (lookup-prefix-name repo oid)
+             (let ([obj (git-object-lookup-prefix repo oid 'enum-type-name)])
+               (cpointer-push-tag! obj (symbol->string 'type-name))
+               obj))
+           (define (close-name obj)
+             (git-object-close obj))))]))
 
 ;;; OIDs
 ; OIDs are just an array of length GIT_OID_RAWSZ.
@@ -77,13 +83,14 @@
          oid->string )
 
 (define-fun-syntax _oid
-  (syntax-id-rules (o i)
-    [(_ o) (_bytes o GIT_OID_RAWSZ)]
-    [(_ i) (type: _bytes
-                  pre: (x => (cond [(bytes? x) x]
+  (syntax-id-rules (o i io :)
+                   [(_ o) (_bytes o GIT_OID_RAWSZ)]
+                   [(_ io) (_bytes io GIT_OID_RAWSZ)]                   
+                   [(_ i) (type: _bytes
+                                 pre: (x => (cond [(bytes? x) x]
                                    [(string? x) (string->oid x)]
                                    [#t (error "Bad input oid")]))) ]
-    [_ (_bytes o GIT_OID_RAWSZ) ]))
+                   [_ (_bytes o GIT_OID_RAWSZ) ]))
 
 (defgit git-oid-fromstr :
   [oid :  (_oid o) ]
@@ -116,7 +123,6 @@
 ; Not to be called from the outside to prevent double free
 ; (used by the finalizer)
 (defgit git-repository-free : _git_repository -> _void)
-
 (defgit/provide git-repository-open : [repo : (_ptr o _git_repository)]  _path -> _status -> repo)
 
 ;;; OBJECT
@@ -135,12 +141,17 @@
 (define-cpointer-type _git_object #f #f
   (lambda (p) (register-finalizer p git-object-close) p))
 
-(defgit git-object-lookup :
+(defgit/provide git-object-lookup :
   [object : (_ptr o _git_object)]  _git_repository (_oid i)  _git_otype -> _status -> object)
 
 (defgit git-object-lookup-prefix : [object : (_ptr o _git_object)]  _git_repository _bytes _int _git_otype -> _status -> object)
 
 (defgit git-object-close : _git_object -> _void )
+(defgit/provide git-object-type : _git_object -> _git_otype )
+(defgit/provide git-object-id : _git_object -> _oid )
+
+;TODO: no ID Shortening funcs. Some other functions missing, but I
+;don't think they're really needed from Racket
 
 ;;; STRUCTS
 (provide (struct-out git-signature)
@@ -158,28 +169,35 @@
 (define _git_time_t _uint64)
 
 ;;; ODB
-(define-cpointer-type/finalizer odb close)
-(define-cpointer-type _git_odb_obj #f #f
-  (lambda (p) (register-finalizer p git-odb-object-close) p))
+(defptr/release odb close)
+(defptr/release odb_object close)
+
 
 ;TODO: Custom backend functions ignored
 ;TODO: Stream-related functions ignored
+(defgit/provide git-repository-database : _git_repository -> _git_odb )
+
 (defgit git-odb-open : [odb : (_ptr o _git_odb)] _path -> _status -> odb)
-(defgit git-odb-close : _git_odb -> _void )
-(defgit git-odb-read : [obj : (_ptr o _git_odb_obj)] _git_odb _oid -> _status -> obj)
-(defgit git-odb-read-prefix : [obj : (_ptr o _git_odb_obj)] _git_odb _oid _int -> _status -> obj)
-(defgit git-odb-read-header : [len : (_ptr o _int)] [type : (_ptr o _git_otype)] _git_odb _oid
-  -> _status -> (values len type ))
-(defgit git-odb-exists : _git_odb _oid -> _bool)
+(defgit/provide git-odb-read : [obj : (_ptr o _git_odb_object)] _git_odb (_oid i) -> _status -> obj)
+(defgit git-odb-read-prefix : [obj : (_ptr o _git_odb_object)] _git_odb _oid _int -> _status -> obj)
+(defgit/provide git-odb-read-header :
+  [len : (_ptr o _int)]
+  [type : (_ptr o _git_otype)]
+  _git_odb
+  (_oid i)
+  -> _status
+  -> (values len type))
+
+(defgit/provide git-odb-exists : _git_odb (_oid i)  -> _bool)
 (defgit git-odb-write : _oid _git_odb [buf : _bytes] [len : _int = (bytes-length buf)] _git_otype -> _status)
 
-(defgit git-odb-hash : (_oid o) [buf : _bytes] [len : _int = (bytes-length buf)] _git_otype -> _status)
-(defgit git-odb-hashfile : (_oid o) _path _git_otype -> _status)
-(defgit git-odb-object-close : _git_odb_obj -> _void)
-(defgit git-odb-object-id : _git_odb_obj -> _oid)
-(defgit git-odb-object-data : _git_odb_obj -> _bytes)
-(defgit git-odb-object-size : _git_odb_obj -> _int)
-(defgit git-odb-object-type : _git_odb_obj -> _git_otype )
+(defgit/provide git-odb-hash : [hash : (_oid o) ]  [buf : _bytes] [len : _int = (bytes-length buf)] _git_otype -> _status -> hash)
+(defgit/provide git-odb-hashfile : [hash : (_oid o) ]  _path _git_otype -> _status -> hash)
+(defgit git-odb-object-close : _git_odb_object -> _void)
+(defgit/provide git-odb-object-id : _git_odb_object -> _oid)
+(defgit/provide git-odb-object-data : [obj : _git_odb_object]  -> [o : _bytes]  -> (subbytes o 0 (git-odb-object-size obj)))
+(defgit/provide git-odb-object-size : _git_odb_object -> _int)
+(defgit/provide git-odb-object-type : _git_odb_object -> _git_otype )
 
 ;;; TAG
 (define-object-type tag)
@@ -200,7 +218,6 @@
 ;;; TREE
 (define-object-type tree)
 (define _git_tree_entry (_cpointer 'git_tree_entry))
-(define _git_index (_cpointer 'git_index))
 (define _git_treebuilder (_cpointer 'git_treebuilder))
 (define _git_config (_cpointer 'git_config))
 (define _git_config_file (_cpointer 'git_config_file))
@@ -214,14 +231,15 @@
 (defgit/provide git-tree-entry-name : _git_tree_entry -> _path )
 (defgit/provide git-tree-entry-id : _git_tree_entry -> _oid)
 (defgit/provide git-tree-entry-type : _git_tree_entry -> _git_otype )
-(defgit git-tree-entry-2object :
+
+(defgit/provide git-tree-entry-2object :
   [obj : (_ptr o _git_object)]
   _git_repository
   _git_tree_entry
   -> _status
   -> obj)
 
-(defgit git-tree-create-fromindex : _oid _git_index -> _status )
+;(defgit git-tree-create-fromindex : _oid _git_index -> _status )
 (defgit git-treebuilder-create :
     [obj : (_ptr o _git_treebuilder)]
     _git_tree
@@ -237,8 +255,9 @@
 
 ;;; BLOB
 (define-object-type blob)
-(defgit git-blob-rawcontent : _git_blob -> _pointer )
-(defgit git-blob-rawsize : _git_blob -> _int )
+(defgit/provide git-blob-rawcontent : [b : _git_blob ]  -> [o : _bytes]  -> (subbytes o 0 (git-blob-rawsize b)))
+(defgit/provide git-blob-rawsize : _git_blob -> _int )
+
 (defgit git-blob-create-fromfile : _oid _git_repository _path -> _int )
 (defgit git-blob-create-frombuffer :
   _oid
@@ -248,7 +267,6 @@
 
 ;;; COMMIT
 (define-object-type commit)
-
 (defgit/provide git-commit-message : _git_commit -> _bytes)
 (defgit/provide git-commit-id : _git_commit ->  _oid )
 (defgit/provide git-commit-message-encoding : _git_commit -> _string)
@@ -269,3 +287,6 @@
 
 (defgit/provide git-commit-parent-oid : _git_commit _uint -> _oid)
 
+;;; REVWALK
+
+(defptr/release revwalk free )
