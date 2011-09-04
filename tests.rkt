@@ -130,5 +130,41 @@
                      (oid->string first-readme-oid))))))
 
 
+(git-test
+ "REVWALK"
+ (let* ([repo (git-repository-open repo-path)]
+        [walk (git-revwalk-new repo)]
+        [commit-list '("f60e30f7c1737e14fde79512b2b01f88277cffc4" 
+                       "30c03590df8c71dc32bde333ceebc9f373b44e34" 
+                       "1b22b09d8b36138940cf49147e81fedec623887d" 
+                       "4d210ffc8633da215ed65fbfbfd7d21b87509575" 
+                       "0ddbfc8f266e73d777591ce31d3ddb4ccb7a9d37" 
+                       "76f62effc71d0230c81bbec6c70f635f42102e0b")])
+
+   (define (check-walk results)
+     (let loop ([oid (git-revwalk-next walk)]
+                [commit-list results])
+       (if oid
+           (begin (check-equal? (car commit-list)
+                                (oid->string oid))
+                  (loop (git-revwalk-next walk)
+                        (cdr commit-list)))
+           (check-equal? commit-list
+                         '()))))
+   (check-equal? (git-revwalk-repository walk) repo)
+   (git-revwalk-push walk (string->oid "f60e30f7c1737e14fde79512b2b01f88277cffc4"))
+   (check-walk commit-list)
+   
+   (git-revwalk-reset walk)
+   (git-revwalk-push walk (string->oid "f60e30f7c1737e14fde79512b2b01f88277cffc4"))   
+   (git-revwalk-sorting walk 'GIT_SORT_REVERSE)
+   (check-walk (reverse commit-list))
+
+   (git-revwalk-reset walk)
+   (git-revwalk-push walk (string->oid "f60e30f7c1737e14fde79512b2b01f88277cffc4"))
+   (git-revwalk-hide walk (string->oid "30c03590df8c71dc32bde333ceebc9f373b44e34"))   
+   (check-walk '())))
+
+
 (git-run-tests)
 

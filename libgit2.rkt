@@ -288,5 +288,18 @@
 (defgit/provide git-commit-parent-oid : _git_commit _uint -> _oid)
 
 ;;; REVWALK
-
 (defptr/release revwalk free )
+(define _revwalk_sort
+  (_bitmask '(GIT_SORT_NONE = 0
+              GIT_SORT_TOPOLOGICAL = 1
+              GIT_SORT_TIME = 2
+              GIT_SORT_REVERSE = 4)))
+
+(defgit/provide git-revwalk-new : [walk : (_ptr o _git_revwalk)] _git_repository -> _status -> walk )
+(defgit/provide git-revwalk-reset : _git_revwalk  -> _void )
+(defgit/provide git-revwalk-push : _git_revwalk (_oid i) -> _status )
+(defgit/provide git-revwalk-hide : _git_revwalk (_oid i) -> _status )
+(defgit/provide git-revwalk-next : [ret : (_oid o)]  _git_revwalk -> [o : _int]  -> (and (zero? o) ret))
+(defgit/provide git-revwalk-sorting : _git_revwalk _revwalk_sort -> _void )
+(defgit/provide git-revwalk-repository : _git_revwalk -> _git_repository )
+
