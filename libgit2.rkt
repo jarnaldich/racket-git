@@ -2,6 +2,7 @@
 (require ffi/unsafe)
 
 ;;; MODULE GLOBALS & CONSTANTS
+(define interface-version '(0 . 14))
 (define GIT_OID_RAWSZ 20)
 (define GIT_OID_HEXSZ (* 2 GIT_OID_RAWSZ))
 (define GIT_OID_MINPREFIXLEN 4)
@@ -25,7 +26,8 @@
   (syntax-id-rules (_status)
     [_status (type: _int
                     post: (r => (when (not (zero? r))
-                                  (error 'status-failed (format "failed with code: ~a" r)))))]))
+                                  (error 'status-failed (format "(Code: ~a) ~a" r (git-lasterror)))
+                                  )))]))
 
 (define-for-syntax (build-name-stx upcase? stx parts)
   (define str
@@ -155,18 +157,25 @@
 
 ;;; STRUCTS
 (provide (struct-out git-signature)
-         (struct-out git_time_in_signature))
+         (struct-out git-time-in-signature))
 
-(define-cstruct _git_time_in_signature
+(define-cstruct _git-time-in-signature
   ([time _int64]
    [offset _int]))
 
 (define-cstruct _git-signature
   ([name _bytes]
    [email _bytes]
-   [when _git_time_in_signature]))
+   [when _git-time-in-signature]))
 
 (define _git_time_t _uint64)
+
+;;; STRARRAY
+(define-cstruct _git-strarray
+  ([tags-char** _bytes]
+   [count _int]))
+
+(defgit git-strarray-free : _git-strarray-pointer -> _void)
 
 ;;; ODB
 (defptr/release odb close)
@@ -201,19 +210,33 @@
 
 ;;; TAG
 (define-object-type tag)
-(defgit git-tag-id : _git_tag -> _oid)
-(defgit git-tag-target : [obj : (_ptr o _git_object)] _git_tag -> _status -> obj)
-(defgit git-tag-target-oid : _git_tag -> _oid)
-(defgit git-tag-type : _git_tag -> _git_otype )
-(defgit git-tag-name : _git_tag -> _string )
-(defgit git-tag-message : _git_tag -> _string )
-(defgit git-tag-tagger : _git_tag -> _git-signature )
-(defgit git-tag-create : _oid _git_repository _bytes _git_object _git-signature _bytes _int -> _status )
+(defgit/provide git-tag-id : _git_tag -> _oid)
+(defgit/provide git-tag-target : [obj : (_ptr o _git_object)] _git_tag -> _status -> obj)
+(defgit/provide git-tag-target-oid : _git_tag -> _oid)
+(defgit/provide git-tag-type : _git_tag -> _git_otype )
+(defgit/provide git-tag-name : _git_tag -> _bytes )
+(defgit/provide git-tag-message : _git_tag -> _bytes )
+(defgit/provide git-tag-tagger : _git_tag -> _git-signature-pointer )
+(defgit/provide git-tag-create :
+  [out : (_oid o)]
+  _git_repository
+  _bytes ; Tag name
+  _git_object ; Reference
+  _git-signature-pointer
+  _bytes ; Message
+  _int ; Force?
+  -> _status -> out )
 (defgit git-tag-create-frombuffer : _oid _git_repository _string _int -> _status )
-(defgit git-tag-create-lightweight : _oid _git_repository _status _git_object _int -> _status )
-(defgit git-tag-delete : _git_repository _string -> _status)
-(defgit git-tag-list : _git_repository _string -> _status)
-;;TODO: git-tag-list ... Need to port the strarray datatype
+(defgit/provide git-tag-create-lightweight :  [out : (_oid o)] _git_repository _bytes _git_object _int -> _status )
+(defgit/provide git-tag-delete : _git_repository _bytes -> _status)
+(defgit/provide git-tag-list : [out : (_ptr o _git-strarray)] _git_repository ->
+  _status ->
+  (begin0
+      (let ((p (git-strarray-tags-char** out)))
+        (for/list ([i (in-range (git-strarray-count out))])
+                  (ptr-ref p _bytes i)))
+    (git-strarray-free out)))
+
 
 ;;; TREE
 (define-object-type tree)
@@ -302,4 +325,88 @@
 (defgit/provide git-revwalk-next : [ret : (_oid o)]  _git_revwalk -> [o : _int]  -> (and (zero? o) ret))
 (defgit/provide git-revwalk-sorting : _git_revwalk _revwalk_sort -> _void )
 (defgit/provide git-revwalk-repository : _git_revwalk -> _git_repository )
+
+;;; VERSION
+(defgit/provide git-libgit2-version : [major : (_ptr o _int)] [minor : (_ptr o _int)] [rev : (_ptr o _int)]
+  -> _void -> (values major minor rev))
+
+;;; ERROR
+(define _git_error
+  (_enum '(
+	GIT_SUCCESS = 0
+	GIT_ERROR = -1
+	; Input was not a properly formatted Git object id. 
+	GIT_ENOTOID = -2
+	; Input does not exist in the scope searched. 
+	GIT_ENOTFOUND = -3
+	; Not enough space available. 
+	GIT_ENOMEM = -4
+	; Consult the OS error information. 
+	GIT_EOSERR = -5
+	; The specified object is of invalid type 
+	GIT_EOBJTYPE = -6
+	; The specified repository is invalid 
+	GIT_ENOTAREPO = -7
+	; The object type is invalid or doesn't match 
+	GIT_EINVALIDTYPE = -8
+	; The object cannot be written because it's missing internal data 
+	GIT_EMISSINGOBJDATA = -9
+	; The packfile for the ODB is corrupted 
+	GIT_EPACKCORRUPTED = -10
+	; Failed to acquire or release a file lock 
+	GIT_EFLOCKFAIL = -11
+	; The Z library failed to inflate/deflate an object's data 
+	GIT_EZLIB = -12
+	; The queried object is currently busy 
+	GIT_EBUSY = -13
+	; The index file is not backed up by an existing repository 
+	GIT_EBAREINDEX = -14
+	; The name of the reference is not valid 
+	GIT_EINVALIDREFNAME = -15
+	; The specified reference has its data corrupted 
+	GIT_EREFCORRUPTED  = -16
+	; The specified symbolic reference is too deeply nested 
+	GIT_ETOONESTEDSYMREF = -17
+	; The pack-refs file is either corrupted or its format is not currently supported 
+	GIT_EPACKEDREFSCORRUPTED = -18
+	; The path is invalid 
+	GIT_EINVALIDPATH = -19
+	; The revision walker is empty; there are no more commits left to iterate 
+	GIT_EREVWALKOVER = -20
+	; The state of the reference is not valid 
+	GIT_EINVALIDREFSTATE = -21
+	; This feature has not been implemented yet 
+	GIT_ENOTIMPLEMENTED = -22
+	; A reference with this name already exists 
+	GIT_EEXISTS = -23
+	; The given integer literal is too large to be parsed 
+	GIT_EOVERFLOW = -24
+	; The given literal is not a valid number 
+	GIT_ENOTNUM = -25
+	; Streaming error 
+	GIT_ESTREAM = -26
+	; invalid arguments to function 
+	GIT_EINVALIDARGS = -27
+	; The specified object has its data corrupted 
+	GIT_EOBJCORRUPTED = -28
+	; The given short oid is ambiguous 
+	GIT_EAMBIGUOUSOIDPREFIX = -29
+	; Skip and passthrough the given ODB backend 
+	GIT_EPASSTHROUGH = -30
+	; The path pattern and string did not match 
+	GIT_ENOMATCH = -31
+	;  The buffer is too short to satisfy the request 
+	GIT_ESHORTBUFFER = -32)))
+
+(defgit/provide git-lasterror : -> _string )
+(defgit/provide git-clearerror : -> _void )
+(defgit/provide git-strerror : _git_error -> _string )
+
+;;; Check version (run when imported)
+(let-values ([(major minor rev) (git-libgit2-version)])
+  (when (not (and (equal? major (car interface-version))
+                  (equal? minor (cdr interface-version))))
+    (error 'libgit2 (format "The installed version ~a.~a does not match the interface version ~a.~a"
+                            major minor
+                            (car interface-version) (cdr interface-version)))))
 

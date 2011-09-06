@@ -129,7 +129,6 @@
        (check-equal? (oid->string (git-odb-hashfile tmp 'GIT_OBJ_BLOB))
                      (oid->string first-readme-oid))))))
 
-
 (git-test
  "REVWALK"
  (let* ([repo (git-repository-open repo-path)]
@@ -165,6 +164,39 @@
    (git-revwalk-hide walk (string->oid "30c03590df8c71dc32bde333ceebc9f373b44e34"))   
    (check-walk '())))
 
+(git-test
+ "TAG"
+ (let* ([repo (git-repository-open repo-path)]
+        [first-commit-oid (string->oid first-commit-str)]
+        [first-commit (git-commit-lookup repo first-commit-oid)]
+        [tag-oid (git-tag-create repo
+                                 #"test-tag"
+                                 first-commit
+                                 (make-git-signature #"Joan Arnaldich"
+                                                     #"jarnaldich@gmail.com"
+                                                     (make-git-time-in-signature (current-seconds)
+                                                                                 2))
+                                 #"A tag for unit testing"
+                                 1)]
+        [tag (git-tag-lookup repo tag-oid)])
+
+   (define (check-delete name)
+     (let ([ref-name (bytes-append #"refs/tags/" name)])
+       (check member ref-name (git-tag-list repo))
+       (git-tag-delete repo name)
+       (check-false (member ref-name (git-tag-list repo)))))
+
+   (check-equal? (git-tag-id tag) tag-oid)
+   (check-equal? (git-tag-target-oid tag) first-commit-oid)
+   (check-equal? (git-tag-type tag) 'GIT_OBJ_COMMIT)
+   (check-equal? (git-object-id (git-tag-target tag))
+                 first-commit-oid)
+   (check-equal? (git-tag-name tag) #"test-tag")
+   (check-equal? (git-tag-message tag)    #"A tag for unit testing")
+   (check-equal? (git-signature-name (git-tag-tagger tag))
+                 #"Joan Arnaldich")
+   (git-tag-create-lightweight repo #"test-tag-light" first-commit 1)
+   (for-each check-delete '(#"test-tag" #"test-tag-light"))))
 
 (git-run-tests)
 
