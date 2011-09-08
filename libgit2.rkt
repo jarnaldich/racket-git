@@ -25,9 +25,11 @@
 (define-fun-syntax _status
   (syntax-id-rules (_status)
     [_status (type: _int
-                    post: (r => (when (not (zero? r))
-                                  (error 'status-failed (format "(Code: ~a) ~a" r (git-lasterror)))
-                                  )))]))
+                    post: (r => (if (< 0 r)
+                                  (error 'status-failed
+                                         (format "(Code: ~a) ~a" r
+                                                 (git-lasterror)))
+                                  r)))]))
 
 (define-for-syntax (build-name-stx upcase? stx parts)
   (define str
@@ -79,6 +81,10 @@
            (define (close-name obj)
              (git-object-close obj))))]))
 
+;;; TYPES
+(defptr/release odb close)
+(defptr/release odb_object close)
+
 ;;; OIDs
 ; OIDs are just an array of length GIT_OID_RAWSZ.
 (provide string->oid
@@ -93,6 +99,7 @@
                                    [(string? x) (string->oid x)]
                                    [#t (error "Bad input oid")]))) ]
                    [_ (_bytes o GIT_OID_RAWSZ) ]))
+
 
 (defgit git-oid-fromstr :
   [oid :  (_oid o) ]
@@ -118,14 +125,53 @@
       (error 'oid->string "Bad oid")))
 
 ;;; REPOSITORY
-(define-cpointer-type _git_repository #f
-  (lambda (x) x)
-  (lambda (p) (register-finalizer p git-repository-free) p))
+(defptr/release repository free)
 
-; Not to be called from the outside to prevent double free
-; (used by the finalizer)
-(defgit git-repository-free : _git_repository -> _void)
-(defgit/provide git-repository-open : [repo : (_ptr o _git_repository)]  _path -> _status -> repo)
+(defgit/provide git-repository-open :
+  [repo : (_ptr o _git_repository)]  _path -> _status -> repo)
+
+(define _git_repository_pathid
+  (_enum '(GIT_REPO_PATH
+           GIT_REPO_PATH_INDEX
+           GIT_REPO_PATH_ODB
+           GIT_REPO_PATH_WORKDIR)))
+
+(defgit/provide git-repository-path : _git_repository _git_repository_pathid ->
+  _path)
+
+; bare = with no working directory
+(defgit/provide git-repository-is-bare : _git_repository -> _status)
+(defgit/provide git-repository-is-empty : _git_repository -> _status)
+(defgit/provide git-repository-head-orphan : _git_repository -> _status)
+(defgit/provide git-repository-head-detached : _git_repository -> _status)
+(defgit/provide git-repository-init :
+  [out : (_ptr o _git_repository)] _path _uint -> _status -> out)
+
+(defgit git-repository-discover :
+  [buf : _bytes ]
+  [size : _uint = (bytes-length buf)]
+  _path
+  _int
+  _path
+  -> _status
+  -> buf )
+
+(defgit/provide git-repository-open3 :
+  [repo : (_ptr o _git_repository)]
+  _path
+  _git_odb
+  _path
+  _path -> _status -> repo )
+
+(defgit/provide git-repository-open2 :
+  [repo : (_ptr o _git_repository)]
+  _path
+  _path
+  _path
+  _path -> _status -> repo )
+
+;TODO: git_repository_config
+
 
 ;;; OBJECT
 (define _git_otype
@@ -157,7 +203,10 @@
 
 ;;; STRUCTS
 (provide (struct-out git-signature)
-         (struct-out git-time-in-signature))
+         (struct-out git-time-in-signature)
+         (struct-out git-index-entry)
+         (struct-out git-index-time)
+         (struct-out git-index-entry-unmerged))
 
 (define-cstruct _git-time-in-signature
   ([time _int64]
@@ -178,10 +227,6 @@
 (defgit git-strarray-free : _git-strarray-pointer -> _void)
 
 ;;; ODB
-(defptr/release odb close)
-(defptr/release odb_object close)
-
-
 ;TODO: Custom backend functions ignored
 ;TODO: Stream-related functions ignored
 (defgit/provide git-repository-database : _git_repository -> _git_odb )
@@ -401,6 +446,44 @@
 (defgit/provide git-lasterror : -> _string )
 (defgit/provide git-clearerror : -> _void )
 (defgit/provide git-strerror : _git_error -> _string )
+
+;;; INDEX
+(define-cstruct _git-index-time
+  ([seconds _uint64]
+   [nanoseconds _uint]))
+
+(define-cstruct _git-index-entry
+  ([ctime _git-index-time]
+   [mtime _git-index-time]
+   [dev _uint]
+   [ino _uint]
+   [mode _uint]
+   [uid _uint]
+   [gid _uint]
+   [file-size _uint64]
+   [oid (_array _byte GIT_OID_RAWSZ)]
+   [flags _ushort]
+   [extended-flags _ushort]
+   [path _path]))
+
+(define-cstruct _git-index-entry-unmerged
+  ([mode (_array _uint 3)]
+   [oid (_array _byte (* 3 GIT_OID_RAWSZ))]
+   [path _bytes]))
+
+(defptr/release index free)
+(defgit/provide git-repository-index :
+  [idx : (_ptr o _git_index)] _git_repository -> _status -> idx)
+(defgit/provide git-index-open :
+  [out : (_ptr o _git_index)] _path -> _status -> out)
+(defgit/provide git-index-read : _git_index -> _status)
+(defgit/provide git-index-entrycount : _git_index -> _uint)
+(defgit/provide git-index-get : _git_index _int -> _git-index-entry-pointer)
+
+(defgit git-index-write : _git_index -> _status )
+(defgit git-index-find : _git_index _path -> _status )
+(defgit git-index-uniq : _git_index -> _void)
+(defgit git-index-add : _git_index _path _bool -> _status )
 
 ;;; Check version (run when imported)
 (let-values ([(major minor rev) (git-libgit2-version)])

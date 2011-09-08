@@ -16,11 +16,14 @@
 (define-syntax (git-run-tests stx)
   #`(run-tests (test-suite "libgit2"
                            #,@test-cases/)))
+
 ;;; GLOBALS
-(define repo-path
-  (build-path (let-values ([(dir _ __)
+(define (source-rel-path . rel)
+  (apply build-path (cons (let-values ([(dir _ __)
                             (split-path (syntax-source #'here))]) dir)
-              (string->path ".git")))
+                          rel)))
+
+(define repo-path (source-rel-path ".git"))
 
 (define first-commit-str "0ddbfc8f266e73d777591ce31d3ddb4ccb7a9d37")
 (define second-commit-str "4d210ffc8633da215ed65fbfbfd7d21b87509575")
@@ -34,13 +37,6 @@
  (check-equal? test-hex
                (oid->string (string->oid test-hex))))
 
-(git-test
- "Repository"
- (check-exn exn:fail? ;TODO: Improve error message...
-            (lambda () (git-repository-open "potato")))
- (check-not-exn
-  (lambda ()
-    (git-repository-open repo-path))))
 
 (git-test
  "Commit"
@@ -197,6 +193,45 @@
                  #"Joan Arnaldich")
    (git-tag-create-lightweight repo #"test-tag-light" first-commit 1)
    (for-each check-delete '(#"test-tag" #"test-tag-light"))))
+
+(git-test
+ "INDEX"
+ (let* ([index-path (build-path repo-path "index")]
+        [repo (git-repository-open repo-path)]        
+        [index (git-index-open index-path)]
+        [repo-index (git-repository-index repo)])
+   (for/list ([i (in-range (git-index-entrycount index))])
+             (let ([entry (git-index-get index i)]
+                   [repo-entry (git-index-get repo-index i)])
+               (check-equal?  (git-index-entry-path entry)
+                              (git-index-entry-path repo-entry))))))
+
+(git-test
+ "REPO"
+ (let* ([index-path (build-path repo-path "index")]
+        [tree-path (source-rel-path ".")]
+        [repo (git-repository-open repo-path)])
+   (check-equal? (git-repository-path repo 'GIT_REPO_PATH)
+                 (path->directory-path repo-path))
+   (check-equal? (git-repository-is-bare repo)
+                 0)
+   (check-equal? (git-repository-is-empty repo) 0)
+;   (check-equal? (git-repository-discover (make-bytes 256) repo-path 1 repo-path) repo-path)
+   (check-equal? (git-repository-path
+                  (git-repository-open3 repo-path
+                                        (git-repository-database repo)
+                                        index-path
+                                        tree-path)
+                  'GIT_REPO_PATH)
+                 (git-repository-path repo 'GIT_REPO_PATH))
+   (check-equal? (git-repository-path
+                  (git-repository-open2 repo-path
+                                        (source-rel-path ".git" "objects")
+                                        index-path
+                                        tree-path)
+                  'GIT_REPO_PATH)
+                 (git-repository-path repo 'GIT_REPO_PATH))))
+
 
 (git-run-tests)
 
